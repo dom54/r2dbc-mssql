@@ -23,6 +23,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,7 +41,7 @@ class PlpColumnIntegrationTests extends IntegrationTestSupport {
         connection.createStatement("DROP TABLE plp_test").execute()
             .flatMap(MssqlResult::getRowsUpdated)
             .onErrorResume(e -> Mono.empty())
-            .thenMany(connection.createStatement("CREATE TABLE plp_test (first NVARCHAR(MAX) NULL, second NVARCHAR(MAX) NULL, id INT NULL)")
+            .thenMany(connection.createStatement("CREATE TABLE plp_test (first NVARCHAR(MAX) NULL, second NVARCHAR(MAX) NULL, id INT NULL, created DATETIME2 NULL)")
                 .execute().flatMap(MssqlResult::getRowsUpdated))
             .as(StepVerifier::create)
             .verifyComplete();
@@ -49,7 +50,7 @@ class PlpColumnIntegrationTests extends IntegrationTestSupport {
     @Test
     void shouldReadMultiplePlpColumnsSpanningPackets() {
 
-        connection.createStatement("INSERT INTO plp_test SELECT TOP " + ROWS + " REPLICATE(N'a', 1000), REPLICATE(N'b', 1500), 1 FROM sys.all_objects")
+        connection.createStatement("INSERT INTO plp_test (first, second, id) SELECT TOP " + ROWS + " REPLICATE(N'a', 1000), REPLICATE(N'b', 1500), 1 FROM sys.all_objects")
             .execute()
             .flatMap(MssqlResult::getRowsUpdated)
             .as(StepVerifier::create)
@@ -70,7 +71,7 @@ class PlpColumnIntegrationTests extends IntegrationTestSupport {
     @Test
     void shouldReadPlpFollowedByIntSpanningPackets() {
 
-        connection.createStatement("INSERT INTO plp_test SELECT TOP " + ROWS + " REPLICATE(N'a', 1000), NULL, 42 FROM sys.all_objects")
+        connection.createStatement("INSERT INTO plp_test (first, second, id) SELECT TOP " + ROWS + " REPLICATE(N'a', 1000), NULL, 42 FROM sys.all_objects")
             .execute()
             .flatMap(MssqlResult::getRowsUpdated)
             .as(StepVerifier::create)
@@ -88,4 +89,24 @@ class PlpColumnIntegrationTests extends IntegrationTestSupport {
             .verify(Duration.ofSeconds(30));
     }
 
+
+    @Test
+    void shouldReadPlpNullFollowedByDatetimeUsingCursor() {
+
+        connection.createStatement("INSERT INTO plp_test (first, id, created) VALUES (NULL, 42, '2026-09-12T10:15:30')")
+            .execute()
+            .flatMap(MssqlResult::getRowsUpdated)
+            .as(StepVerifier::create)
+            .expectNext(1L)
+            .verifyComplete();
+
+        connection.createStatement("SELECT first, created FROM plp_test WHERE id = @P0 /* cursored */")
+            .bind("P0", 42)
+            .execute()
+            .flatMap(it -> it.map((row, rowMetadata) -> row.get("created", LocalDateTime.class)))
+            .as(StepVerifier::create)
+            .expectNext(LocalDateTime.parse("2026-09-12T10:15:30"))
+            .expectComplete()
+            .verify(Duration.ofSeconds(30));
+    }
 }
